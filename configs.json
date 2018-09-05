@@ -1,0 +1,8 @@
+{
+  "nps-places-boundaries-v2": {
+    "path": "/home/jmcandrew/dev/vt-studio-lite/configs/nps-places-data.yml",
+    "default": true,
+    "enabled": true,
+    "lastUpdate": null
+  }
+}
