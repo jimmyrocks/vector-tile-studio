@@ -1,4 +1,5 @@
 {
+  "name": "vector-tile-studio",
   "dependencies": {
     "express": "^4.16.3",
     "geojson-vt": "^3.2.0",
