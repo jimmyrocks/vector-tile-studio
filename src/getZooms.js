@@ -103,7 +103,7 @@ module.exports = function (config) {
   console.time('total time');
   var cacheDb = new SqliteDb(false, false, ['CREATE TABLE tiles (id INT, z INT, y INT, x INT, layer_name TEXT, tile TEXT)']);
   cacheDb.then(function (db) {
-    var outpath = '/home/jmcandrew/dev/vt-studio-lite/vtlite-data.mbtiles';
+    var outpath = config.outpath;
     // Now we have a sqlitedb to hold all our info
 
     getLayers(config, db).catch(function (e) {
