@@ -6,7 +6,7 @@ var geojsonvt = require('geojson-vt');
 var vtpbf = require('vt-pbf');
 var iterateTasksLight = require('jm-tools').iterateTasksLight;
 var crypto = require('crypto');
-var zlib = require('zlib')
+var zlib = require('zlib');
 
 function toID (z, x, y) {
   return (((Math.pow(2, z) * y) + x) * 32) + z;
@@ -127,14 +127,16 @@ module.exports = function (config) {
 
 var buildMBTiles = function (config) {
   var vectorLayers = [];
-  config.Layer.forEach(function(layer) {
+  config.Layer.forEach(function (layer) {
     var layerObj = {};
     layerObj['id'] = layer.id;
     layerObj['description'] = layer.description;
     layerObj['fields'] = layer.fields;
     vectorLayers.push(JSON.parse(JSON.stringify(layerObj)));
   });
-  var jsonObj = JSON.stringify({'vector_layers': vectorLayers});
+  var jsonObj = JSON.stringify({
+    'vector_layers': vectorLayers
+  });
   return [
     'CREATE TABLE metadata (name TEXT, value TEXT)',
     'CREATE TABLE images (tile_data BLOB, tile_id text)',
@@ -152,12 +154,12 @@ var buildMBTiles = function (config) {
     '   JOIN images ON images.tile_id = map.tile_id;',
     'INSERT INTO metadata VALUES (\'attribution\', \'' + config.attribution + '\')',
     'INSERT INTO metadata VALUES (\'center\', \'' + config.center.join(',') + '\')',
-    'INSERT INTO metadata VALUES (\'description\', \'' + config.description  + '\')',
+    'INSERT INTO metadata VALUES (\'description\', \'' + config.description + '\')',
     'INSERT INTO metadata VALUES (\'format\', \'pbf\')',
     'INSERT INTO metadata VALUES (\'maxzoom\', \'' + config.maxzoom + '\')',
     'INSERT INTO metadata VALUES (\'minzoom\', \'' + config.minzoom + '\')',
-    'INSERT INTO metadata VALUES (\'name\', \'' + config.name  + '\')',
-    'INSERT INTO metadata VALUES (\'json\', \'' + jsonObj  + '\')'
+    'INSERT INTO metadata VALUES (\'name\', \'' + config.name + '\')',
+    'INSERT INTO metadata VALUES (\'json\', \'' + jsonObj + '\')'
   ];
 };
 
@@ -177,31 +179,6 @@ var merge = function (db, outDbPath, config) {
       console.time('write time');
       console.log('');
 
-      // var mergeLast = function(e,r, insertStatement) {
-      //   // console.log(r);
-      //   var tileJson = JSON.parse(r.tile);
-      //   var layerName, mergedTile, buff;
-      //   if (tileJson && tileJson.features && tileJson.features.length) {
-      //     layerName = tileJson && tileJson.features && tileJson.features[0] && tileJson.features[0].tags && tileJson.features[0].tags.layerName;
-      //     mergedTile = {};
-      //     mergedTile[layerName] = tileJson;
-      //     buff = vtpbf.fromGeojsonVt(mergedTile);
-      //     var queued = queue.add();
-      //     process.stdout.clearLine();
-      //     process.stdout.cursorTo(0);
-      //     process.stdout.write(queued.toString());
-      //     insertStatement.run(
-      //       [tileJson.z, tileJson.x, yToRowID(tileJson.z, tileJson.y), new Buffer(buff, 'base64')],
-      //       function (e, r){
-      //         e && console.log('e', e);
-      //         // console.log(tileJson.z, tileJson.x, yToRowID(tileJson.z, tileJson.y), tileJson.y);
-      //         var remaining = queue.remove();
-      //         process.stdout.clearLine();
-      //         process.stdout.cursorTo(0);
-      //         process.stdout.write(remaining.toString());
-      //     });
-      //   }
-      // };
       var writeLine = function (line) {
         process.stdout.clearLine();
         process.stdout.cursorTo(0);
@@ -230,10 +207,10 @@ var merge = function (db, outDbPath, config) {
       };
 
       console.timeEnd('merge time');
-      console.log('');
 
       outDb.database.run('BEGIN TRANSACTION');
       var lastId, buildRecord, metadata;
+      var start, time = 0;
       var insertCommand = outDb.database.prepare('INSERT INTO tiles_temp (tile_data, tile_id, zoom_level, tile_column, tile_row) VALUES (?, ?, ?, ?, ?)');
       outDb.database.parallelize(function () {
         db.database.each('SELECT id, z, y, x, layer_name, tile FROM tiles ORDER BY id', function (e, r) {
@@ -249,6 +226,9 @@ var merge = function (db, outDbPath, config) {
             throw new Error('MISSING DATA z:' + r.z + ' x:' + r.x + ' y:' + r.y);
           }
           buildRecord[r.layer_name] = JSON.parse(zlib.inflateSync(r.tile));
+          if (config.removeNulls) {
+            buildRecord[r.layer_name] = removeNulls(buildRecord[r.layer_name]);
+          }
           metadata = {
             id: r.id,
             z: r.z,
@@ -263,6 +243,8 @@ var merge = function (db, outDbPath, config) {
         });
       });
       queue.promise.then(function (r) {
+        console.log('');
+        console.log('total delete time', time);
         insertCommand.finalize();
         outDb.database.serialize(function () {
           outDb.database.run('INSERT INTO images SELECT MAX(tile_data) AS tile_data, tile_id FROM tiles_temp GROUP BY tile_id');
@@ -302,6 +284,23 @@ var merge = function (db, outDbPath, config) {
   });
 };
 
+var removeNulls = function (layer) {
+  var tags = {};
+    if (layer.features) {
+      for (var j = 0; j < layer.features.length; j++) {
+        if (layer.features[j].tags) {
+          tags = Object.keys(layer.features[j].tags);
+          for (var k = 0; k < tags.length; k++) {
+            if (layer.features[j].tags[tags[k]] === null) {
+              delete layer.features[j].tags[tags[k]];
+            }
+          }
+        }
+      }
+    }
+  return layer;
+};
+
 var getZoom = function (vectorSettings, query, geometryField, layerName, zoom, pool, db) {
   return new Promise(function (resolve, reject) {
     console.log('Pulling from the Database (Layer: ' + layerName + (zoom ? (' zoom: ' + zoom) : ' all zooms') + ')');
@@ -311,7 +310,7 @@ var getZoom = function (vectorSettings, query, geometryField, layerName, zoom, p
 
       // Set the vector tiles for this zoom
       var currVectorSettings = JSON.parse(JSON.stringify(vectorSettings));
-      if (zoom) { 
+      if (zoom) {
         currVectorSettings.minZoom = zoom;
         currVectorSettings.maxZoom = zoom;
         currVectorSettings.indexMaxZoom = zoom;
@@ -366,7 +365,7 @@ var getLayer = function (layer, config, db) {
 
     // TODO: change this to MAX zoom (only on minzoom for testing)
     for (var zoom = config.minzoom; zoom <= (byZoom ? config.maxzoom : config.minzoom); zoom++) {
-    // for (var zoom = config.minzoom; zoom <= 6; zoom++) {
+      // for (var zoom = config.minzoom; zoom <= 6; zoom++) {
       zoomTasks.push({
         'name': 'zoom: ' + zoom + ' for ' + layer.id,
         'description': 'Queries the layer at a specific zoom',
