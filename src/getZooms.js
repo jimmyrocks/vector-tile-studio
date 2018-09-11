@@ -1,3 +1,7 @@
+/* eslint-env node */
+/* global Promise */
+/* eslint no-console: ["error", { allow: ["warn", "error", "log", "time", "timeEnd"] }] */
+
 var pg = require('pg');
 var sqlite3 = require('sqlite3');
 var toGeojson = require('./toGeojson');
@@ -19,7 +23,7 @@ function yToRowID (z, y) {
 var TaskQueue = function () {
   var tasks = 1;
   var res;
-  var p = new Promise(function (resolve, reject) {
+  var p = new Promise(function (resolve) {
     res = resolve;
   });
   return {
@@ -99,6 +103,37 @@ var SqliteDb = function (path, cached, initCommands) {
   });
 };
 
+var auditTiles = function (outDb, db) {
+  outDb.database.all('SELECT zoom_level, tile_column, tile_row, layer_count FROM tiles_temp', function (e, r) {
+    db.database.all('SELECT id, count(*) as count from tiles group by id', function (ee, rr) {
+      var store = {};
+      var bad = {};
+      console.log('e', e);
+      r.forEach(function (row) {
+        var tileId = toID(row.zoom_level, row.tile_column, yToRowID(row.zoom_level, row.tile_row));
+        store[tileId] = {
+          new: row.layer_count,
+          orig: 0
+        };
+        bad[tileId] = 'new';
+      });
+      rr.forEach(function (orow) {
+        if (store[orow.id]) {
+          store[orow.id].orig = orow.count;
+          delete bad[orow.id];
+        } else {
+          store[orow.id] = {
+            new: 0,
+            orig: orow.count
+          };
+          bad[orow.id] = 'orig';
+        }
+      });
+      console.log('bad', bad);
+    });
+  });
+};
+
 module.exports = function (config) {
   console.time('total time');
   var cacheDb = new SqliteDb(false, false, ['CREATE TABLE tiles (id INT, z INT, y INT, x INT, layer_name TEXT, tile TEXT)']);
@@ -116,7 +151,7 @@ module.exports = function (config) {
       merge(db, outpath, config).catch(function (e) {
         db.close();
         throw new Error(e);
-      }).then(function (r) {
+      }).then(function () {
         console.log('done 2');
         db.close();
         console.timeEnd('total time');
@@ -141,7 +176,7 @@ var buildMBTiles = function (config) {
     'CREATE TABLE metadata (name TEXT, value TEXT)',
     'CREATE TABLE images (tile_data BLOB, tile_id text)',
     'CREATE TABLE map (zoom_level INT, tile_column INT, tile_row INT, tile_id TEXT, grid_id TEXT)',
-    'CREATE TABLE tiles_temp (tile_data BLOB, tile_id text, zoom_level INT, tile_column INT, tile_row INT)',
+    'CREATE TABLE tiles_temp (tile_data BLOB, tile_id text, zoom_level INT, tile_column INT, tile_row INT, layer_count INT)',
     'CREATE UNIQUE INDEX IF NOT EXISTS images_id ON images (tile_id)',
     'CREATE UNIQUE INDEX IF NOT EXISTS map_index ON map (zoom_level, tile_column, tile_row)',
     'CREATE VIEW tiles AS ' +
@@ -166,15 +201,10 @@ var buildMBTiles = function (config) {
 var merge = function (db, outDbPath, config) {
   return new Promise(function (resolve, reject) {
     new SqliteDb(outDbPath, false, buildMBTiles(config)).catch(function (e) {
-      throw new Error(e);
       console.log(e.stack);
-      reject(e);
+      throw new Error(e);
     }).then(function (outDb) {
       var queue = new TaskQueue();
-      var idList = [];
-      var lastTile = {};
-      var compiledTile = {};
-      mergedTiles = {};
       console.time('merge time');
       console.time('write time');
       console.log('');
@@ -197,8 +227,8 @@ var merge = function (db, outDbPath, config) {
         var compressed = zlib.deflateSync(buff);
         var tileId = crypto.createHash('md5').update(JSON.stringify(record)).digest('hex');
         insertCommand.run(
-          [compressed, tileId, metadata.z, metadata.x, yToRowID(metadata.z, metadata.y)],
-          function (e, r) {
+          [compressed, tileId, metadata.z, metadata.x, yToRowID(metadata.z, metadata.y), metadata.layerCount],
+          function (e) {
             e && console.log('e', e, '\n\n');
             removed = queue.remove();
             writeLine('Removed: ' + removed);
@@ -209,9 +239,8 @@ var merge = function (db, outDbPath, config) {
       console.timeEnd('merge time');
 
       outDb.database.run('BEGIN TRANSACTION');
-      var lastId, buildRecord, metadata;
-      var start, time = 0;
-      var insertCommand = outDb.database.prepare('INSERT INTO tiles_temp (tile_data, tile_id, zoom_level, tile_column, tile_row) VALUES (?, ?, ?, ?, ?)');
+      var lastId, buildRecord, metadata, layerCount;
+      var insertCommand = outDb.database.prepare('INSERT INTO tiles_temp (tile_data, tile_id, zoom_level, tile_column, tile_row, layer_count) VALUES (?, ?, ?, ?, ?, ?)');
       outDb.database.parallelize(function () {
         db.database.each('SELECT id, z, y, x, layer_name, tile FROM tiles ORDER BY id', function (e, r) {
           if (r.id !== lastId) {
@@ -220,6 +249,7 @@ var merge = function (db, outDbPath, config) {
               writeOut(insertCommand, buildRecord, metadata);
             }
             buildRecord = {};
+            layerCount = 0;
           }
           // Add to build record
           if (buildRecord[r.layer_name]) {
@@ -233,7 +263,8 @@ var merge = function (db, outDbPath, config) {
             id: r.id,
             z: r.z,
             y: r.y,
-            x: r.x
+            x: r.x,
+            layerCount: ++layerCount
           };
           lastId = r.id;
         }, function () {
@@ -243,12 +274,13 @@ var merge = function (db, outDbPath, config) {
         });
       });
       queue.promise.then(function (r) {
-        console.log('');
-        console.log('total delete time', time);
         insertCommand.finalize();
         outDb.database.serialize(function () {
           outDb.database.run('INSERT INTO images SELECT MAX(tile_data) AS tile_data, tile_id FROM tiles_temp GROUP BY tile_id');
           outDb.database.run('INSERT INTO map SELECT zoom_level, tile_column, tile_row, tile_id, null FROM tiles_temp');
+          if (config.audit) {
+            auditTiles(outDb, db);
+          }
           outDb.database.run('DROP TABLE tiles_temp');
           outDb.database.run('COMMIT', function (e) {
             outDb.database.run('VACUUM');
@@ -286,18 +318,18 @@ var merge = function (db, outDbPath, config) {
 
 var removeNulls = function (layer) {
   var tags = {};
-    if (layer.features) {
-      for (var j = 0; j < layer.features.length; j++) {
-        if (layer.features[j].tags) {
-          tags = Object.keys(layer.features[j].tags);
-          for (var k = 0; k < tags.length; k++) {
-            if (layer.features[j].tags[tags[k]] === null) {
-              delete layer.features[j].tags[tags[k]];
-            }
+  if (layer.features) {
+    for (var j = 0; j < layer.features.length; j++) {
+      if (layer.features[j].tags) {
+        tags = Object.keys(layer.features[j].tags);
+        for (var k = 0; k < tags.length; k++) {
+          if (layer.features[j].tags[tags[k]] === null) {
+            delete layer.features[j].tags[tags[k]];
           }
         }
       }
     }
+  }
   return layer;
 };
 
@@ -394,7 +426,7 @@ var getLayers = function (config, db) {
     });
 
     iterateTasksLight(taskList, 'Get Layers')
-      .then(function (r) {
+      .then(function () {
         db.query('SELECT count(*) as total_tiles, count(distinct id) as unique_tiles FROM tiles').then(function (r) {
           console.log('tile count', r);
           resolve();
