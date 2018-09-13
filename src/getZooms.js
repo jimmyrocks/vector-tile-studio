@@ -161,17 +161,17 @@ module.exports = function (config) {
 };
 
 var buildMBTiles = function (config) {
-  var vectorLayers = [];
-  config.Layer.forEach(function (layer) {
-    var layerObj = {};
-    layerObj['id'] = layer.id;
-    layerObj['description'] = layer.description;
-    layerObj['fields'] = layer.fields;
-    vectorLayers.push(JSON.parse(JSON.stringify(layerObj)));
-  });
-  var jsonObj = JSON.stringify({
-    'vector_layers': vectorLayers
-  });
+  // var vectorLayers = [];
+  // config.Layer.forEach(function (layer) {
+  //   var layerObj = {};
+  //   layerObj['id'] = layer.id;
+  //   layerObj['description'] = layer.description;
+  //   layerObj['fields'] = layer.fields;
+  //   vectorLayers.push(JSON.parse(JSON.stringify(layerObj)));
+  // });
+  // var jsonObj = JSON.stringify({
+  //   'vector_layers': vectorLayers
+  // });
   return [
     'CREATE TABLE metadata (name TEXT, value TEXT)',
     'CREATE TABLE images (tile_data BLOB, tile_id text)',
@@ -193,12 +193,24 @@ var buildMBTiles = function (config) {
     'INSERT INTO metadata VALUES (\'format\', \'pbf\')',
     'INSERT INTO metadata VALUES (\'maxzoom\', \'' + config.maxzoom + '\')',
     'INSERT INTO metadata VALUES (\'minzoom\', \'' + config.minzoom + '\')',
-    'INSERT INTO metadata VALUES (\'name\', \'' + config.name + '\')',
-    'INSERT INTO metadata VALUES (\'json\', \'' + jsonObj + '\')'
+    'INSERT INTO metadata VALUES (\'name\', \'' + config.name + '\')' //,
+    // 'INSERT INTO metadata VALUES (\'json\', \'' + jsonObj + '\')'
   ];
 };
 
 var merge = function (db, outDbPath, config) {
+  // Create the 'JSON' metadata
+  // We are going to check it to see if any new fields come in from the GeoJSON
+  // You can set the fields in the YML, but if that changes, mapbox won't pick up the fields for styling
+  var vectorLayers = [];
+  config.Layer.forEach(function (layer) {
+    var layerObj = {};
+    layerObj['id'] = layer.id;
+    layerObj['description'] = layer.description;
+    layerObj['fields'] = layer.fields;
+    vectorLayers.push(JSON.parse(JSON.stringify(layerObj)));
+  });
+
   return new Promise(function (resolve, reject) {
     new SqliteDb(outDbPath, false, buildMBTiles(config)).catch(function (e) {
       console.log(e.stack);
@@ -243,6 +255,9 @@ var merge = function (db, outDbPath, config) {
       var insertCommand = outDb.database.prepare('INSERT INTO tiles_temp (tile_data, tile_id, zoom_level, tile_column, tile_row, layer_count) VALUES (?, ?, ?, ?, ?, ?)');
       outDb.database.parallelize(function () {
         db.database.each('SELECT id, z, y, x, layer_name, tile FROM tiles ORDER BY id', function (e, r) {
+          var layerFields = {};
+          var layerIdx = -1;
+
           if (r.id !== lastId) {
             if (lastId) {
               // WRITE OUT
@@ -257,7 +272,19 @@ var merge = function (db, outDbPath, config) {
           }
           buildRecord[r.layer_name] = JSON.parse(zlib.inflateSync(r.tile));
           if (config.removeNulls) {
-            buildRecord[r.layer_name] = removeNulls(buildRecord[r.layer_name]);
+            layerFields = {};
+            layerIdx = -1;
+            for (var i = 0; i < vectorLayers.length; i++) {
+              if (vectorLayers[i].id === r.layer_name) {
+                layerIdx = i;
+                layerFields = vectorLayers[i].fields;
+              }
+            }
+            if (layerIdx === -1) {
+              layerIdx = vectorLayers.push({'id': r.layer_name, 'fields': layerFields}) - 1;
+            }
+            buildRecord[r.layer_name] = removeNulls(buildRecord[r.layer_name], layerFields);
+            vectorLayers[layerIdx].fields = layerFields;
           }
           metadata = {
             id: r.id,
@@ -274,10 +301,17 @@ var merge = function (db, outDbPath, config) {
         });
       });
       queue.promise.then(function (r) {
+        var jsonObj = JSON.stringify({
+          'vector_layers': vectorLayers
+        });
+        console.log(jsonObj);
+        process.exit();
+
         insertCommand.finalize();
         outDb.database.serialize(function () {
           outDb.database.run('INSERT INTO images SELECT MAX(tile_data) AS tile_data, tile_id FROM tiles_temp GROUP BY tile_id');
           outDb.database.run('INSERT INTO map SELECT zoom_level, tile_column, tile_row, tile_id, null FROM tiles_temp');
+          outDb.database.run('INSERT INTO metadata VALUES (\'json\', \'' + jsonObj + '\')');
           if (config.audit) {
             auditTiles(outDb, db);
           }
@@ -316,15 +350,23 @@ var merge = function (db, outDbPath, config) {
   });
 };
 
-var removeNulls = function (layer) {
+var removeNulls = function (layer, layerFields) {
   var tags = {};
   if (layer.features) {
     for (var j = 0; j < layer.features.length; j++) {
       if (layer.features[j].tags) {
         tags = Object.keys(layer.features[j].tags);
         for (var k = 0; k < tags.length; k++) {
+
+          // Remove Nulls
           if (layer.features[j].tags[tags[k]] === null) {
             delete layer.features[j].tags[tags[k]];
+          } else {
+            // This is in the else, because we're not going to bother adding "nulls" to our metadata
+            // verify fields (this only checks the type of the first occurrence, we may want to change that 
+            if (layerFields[tags[k]] === undefined && tags[k] !== 'layerName') {
+              layerFields[tags[k]] = Object.prototype.toString.call(layer.features[j].tags[tags[k]]).slice(8, -1);
+            }
           }
         }
       }
