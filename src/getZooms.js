@@ -304,8 +304,6 @@ var merge = function (db, outDbPath, config) {
         var jsonObj = JSON.stringify({
           'vector_layers': vectorLayers
         });
-        console.log(jsonObj);
-        process.exit();
 
         insertCommand.finalize();
         outDb.database.serialize(function () {
