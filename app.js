@@ -9,20 +9,25 @@
 var iterateTasksLight = require('jm-tools').iterateTasksLight;
 var readYml = require('./src/readYml');
 var readJson = require('./src/readJson');
+var getZooms = require('./src/getZooms');
 var mainConfigFile = __dirname + '/configs.json';
-var configName = 'nps-places-boundaries-v2';
 var write = require('./src/writeResults');
 
 var taskList = [{
   'name': 'jsonConfigFile',
   'description': 'Loads the JSON file that drives the changes',
   'task': readJson,
-  'params': [mainConfigFile, configName]
+  'params': [mainConfigFile, 0]
 },{
   'name': 'ymlConfigFile',
   'description': 'Loads the mapbox studio YML file into JSON',
   'task': readYml,
   'params': ['{{jsonConfigFile.path}}']
+},{
+  'name': 'getZooms',
+  'description': 'Builds the tiles',
+  'task': getZooms,
+  'params': ['{{ymlConfigFile}}']
 }];
 
 iterateTasksLight(taskList, 'Run vt-config')
