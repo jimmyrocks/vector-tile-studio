@@ -150,6 +150,7 @@ module.exports = function (config) {
       console.log('done 1');
       merge(db, outpath, config).catch(function (e) {
         db.close();
+        console.log(e.stack);
         throw new Error(e);
       }).then(function () {
         console.log('done 2');
@@ -362,7 +363,7 @@ var removeNulls = function (layer, layerFields) {
           } else {
             // This is in the else, because we're not going to bother adding "nulls" to our metadata
             // verify fields (this only checks the type of the first occurrence, we may want to change that 
-            if (layerFields[tags[k]] === undefined && tags[k] !== 'layerName') {
+            if (tags[k] !== 'layerName' && layerFields[tags[k]] === undefined) {
               layerFields[tags[k]] = Object.prototype.toString.call(layer.features[j].tags[tags[k]]).slice(8, -1);
             }
           }
@@ -419,14 +420,14 @@ var getLayer = function (layer, config, db) {
     var extent = 'ST_MAKEENVELOPE(' + datasource.extent + ')'; // )
     var query = datasource.table;
     var vectorSettings = {
-      maxZoom: config.maxzoom,
-      minZoom: config.minzoom,
-      tolerance: 3,
-      extent: 4096,
-      buffer: layer.properties['buffer-size'],
-      debug: 1,
+      maxZoom: layer.properties.maxzoom || config.maxzoom,
+      minZoom: layer.properties.minzoom || config.minzoom,
+      tolerance: layer.properties.tolerance || config.tolerance || 3,
+      extent:  layer.properties.extent|| config.tolerance || 4096,
+      buffer: layer.properties['buffer-size'] || 48,
+      debug: layer.properties.debug || 1,
       promoteId: datasource.key_field,
-      indexMaxZoom: config.maxzoom,
+      indexMaxZoom: layer.properties.maxzoom || config.maxzoom,
       indexMaxPoints: 0
     };
     query = query.replace(/!bbox!/g, extent);
@@ -435,9 +436,7 @@ var getLayer = function (layer, config, db) {
     query = 'SELECT ST_AsGeoJson(ST_Transform("' + geometryField + '",4326)) "' + geometryField + '_geojson", * FROM ' + query + ' WHERE "' + geometryField + '" IS NOT NULL';
     var pool = createConnection(connectionString);
 
-    // TODO: change this to MAX zoom (only on minzoom for testing)
-    for (var zoom = config.minzoom; zoom <= (byZoom ? config.maxzoom : config.minzoom); zoom++) {
-      // for (var zoom = config.minzoom; zoom <= 6; zoom++) {
+    for (var zoom = vectorSettings.minZoom; zoom <= (byZoom ? vectorSettings.maxZoom : vectorSettings.minZoom); zoom++) {
       zoomTasks.push({
         'name': 'zoom: ' + zoom + ' for ' + layer.id,
         'description': 'Queries the layer at a specific zoom',
@@ -446,7 +445,7 @@ var getLayer = function (layer, config, db) {
       });
     }
 
-    return iterateTasksLight(zoomTasks, 'Zooms ' + config.minzoom + ' to ' + config.minzoom + ' for: ' + layerName).then(function (r) {
+    return iterateTasksLight(zoomTasks, 'Zooms ' + vectorSettings.minZoom + ' to ' + vectorSettings.maxZoom + ' for: ' + layerName).then(function (r) {
       pool.end();
       resolve(r);
     }).catch(reject);
