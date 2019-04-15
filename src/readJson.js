@@ -9,6 +9,10 @@ module.exports = function (path, name, options) {
       } else {
         try {
           json = JSON.parse(data.toString());
+          if (typeof name === 'number') {
+            // Allow index by value as well
+            name = Object.keys(json)[name];
+          }
           if (name && json[name]) {
             resolve(json[name]);
           } else {
