@@ -1,13 +1,14 @@
 {
   "name": "vector-tile-studio",
   "dependencies": {
-    "express": "^4.16.3",
-    "geojson-vt": "^3.2.0",
+    "express": "^4.17.1",
+    "fandlebars": "git+https://git@github.com/jimmyrocks/fandlebars.git",
+    "geojson-vt": "^3.2.1",
     "jm-tools": "git+https://git@github.com/jimmyrocks/jm-tools.git",
-    "js-yaml": "^3.12.0",
-    "pg": "^7.4.3",
-    "sqlite3": "^4.0.2",
-    "tape": "^4.9.1",
+    "js-yaml": "^3.13.1",
+    "pg": "^7.12.1",
+    "sqlite3": "^4.0.9",
+    "tape": "^4.11.0",
     "vt-pbf": "^3.1.1"
   }
 }
