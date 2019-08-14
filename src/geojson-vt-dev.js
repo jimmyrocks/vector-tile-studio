@@ -1,38 +1,13 @@
+var zlib = require('zlib');
+
 (function (global, factory) {
 typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
 typeof define === 'function' && define.amd ? define(factory) :
 (global.geojsonvt = factory());
 }(this, (function () { 'use strict';
 
-var TaskQueue = function() {
-  var tasks = 1;
-  var res;
-  var p = new Promise(function (resolve, reject) {
-    res = resolve;
-  });
-  return {
-    add: function() {
-      tasks += 1;
-      if (tasks === 0) {
-        res()
-      }
-      return tasks;
-    },
-    remove: function() {
-      tasks += -1;
-      if (tasks === 0) {
-        res()
-      }
-      return tasks;
-    },
-    value: function() {
-      return tasks;
-    },
-    promise: p
-  };
-};
-
 // calculate simplification data using optimized Douglas-Peucker algorithm
+
 function simplify(coords, first, last, sqTolerance) {
     var maxSqDist = sqTolerance;
     var mid = (last - first) >> 1;
@@ -611,9 +586,7 @@ function createTile(features, z, tx, ty, options) {
         maxX: -1,
         maxY: 0
     };
-    var layerName;
     for (var i = 0; i < features.length; i++) {
-        layerName = layerName ? layerName : (features[i].tags && features[i].tags.layerName);
         tile.numFeatures++;
         addFeature(tile, features[i], tolerance, options);
 
@@ -627,18 +600,25 @@ function createTile(features, z, tx, ty, options) {
         if (maxX > tile.maxX) tile.maxX = maxX;
         if (maxY > tile.maxY) tile.maxY = maxY;
     }
-      if(tile.features.length) {
-      options.queue.add();
-      options.tileDb.run('INSERT INTO tiles (id, z, y, x, layer_name, tile) VALUES (?, ?, ?, ?, ?, ?)', [options.tileId, tile.z, tile.y, tile.x, layerName, JSON.stringify(tile)], function(e,r) {        options.queue.remove();
-      });
-     }
-
-    delete tile.features;
-    return tile;
+    // return tile;
+  if (z >= options.minZoom && z <= options.maxZoom && tile.features.length) { // Only Store the deepest zoom level
+  var transformedTile = zlib.deflateSync(JSON.stringify(transformTile(tile, options.extent)));
+  options.queue.add();
+  options.tileDb.run(
+    'INSERT INTO tiles (id, z, y, x, layer_name, tile) VALUES (?, ?, ?, ?, ?, ?)',
+    [options.tileId, tile.z, tile.y, tile.x, options.layerName, transformedTile],
+    function(e,r) {
+      if (e) {
+        throw new Error(e);
+      }
+      options.queue.remove();
+    });
+  }
+  return tile; //TODO: remove this to clean up memory?
 }
 
+
 function addFeature(tile, feature, tolerance, options) {
-  // Only store the max zoom tiles
 
     var geom = feature.geometry,
         type = feature.type,
@@ -670,8 +650,6 @@ function addFeature(tile, feature, tolerance, options) {
         }
     }
 
-  // console.log(options);
-  if (tile.z === options.maxzoom) { 
     if (simplified.length) {
         var tags = feature.tags || null;
         if (type === 'LineString' && options.lineMetrics) {
@@ -689,15 +667,8 @@ function addFeature(tile, feature, tolerance, options) {
         if (feature.id !== null) {
             tileFeature.id = feature.id;
         }
-      var tileText = JSON.stringify(tileFeature);
-      // options.queue.add();
-      // options.tileDb.run('INSERT INTO tiles (id, z, y, x, layer_name, tile) VALUES (?, ?, ?, ?, ?, ?)', [options.tileId, tile.z, tile.y, tile.x, tags.layerName, tileText], function(e,r) {
-      //   options.queue.remove();
-      // });
-      //
         tile.features.push(tileFeature);
     }
-  }
 }
 
 function addLine(result, geom, tile, tolerance, isPolygon, isOuter) {
@@ -742,64 +713,81 @@ function rewind(ring, clockwise) {
 }
 
 function geojsonvt(data, options) {
+  options.queue = new TaskQueue();
   return new Promise(function(resolve, reject) {
     try {
-      var result = new GeoJSONVT(data, options).then(resolve).catch(reject);
+      var result = new GeoJSONVT(data, options);
+      // Wait for the database queue to finish
+      options.queue.promise.catch(reject).then(function(){
+        resolve(result);
+      });
+      options.queue.remove();
     } catch(e) {
+      console.log(e.stack);
+      throw new Error(e);
       reject(e);
     }
   });
 }
 
+var TaskQueue = function() {
+  var tasks = 1;
+  var res;
+  var p = new Promise(function (resolve, reject) {
+    res = resolve;
+  });
+  return {
+    add: function() {
+      tasks += 1;
+      return tasks;
+    },
+    remove: function(r) {
+      tasks += -1;
+      if (tasks === 0) {
+        res(r);
+      }
+      return tasks;
+    },
+    value: function() {
+      return tasks;
+    },
+    promise: p
+  };
+};
+
 function GeoJSONVT(data, options) {
-  var that = this;
-  return new Promise(function(resolve, reject) {
-    var queue = new TaskQueue();
-    try {
-      options = that.options = extend(Object.create(that.options), options);
-      options.queue = queue;
+    options = this.options = extend(Object.create(this.options), options);
 
-      var debug = options.debug;
+    var debug = options.debug;
 
-      if (debug) console.time('preprocess data');
+    if (debug) console.time('preprocess data');
 
-      if (options.maxZoom < 0 || options.maxZoom > 24) throw new Error('maxZoom should be in the 0-24 range');
-      if (options.promoteId && options.generateId) throw new Error('promoteId and generateId cannot be used together.');
+    if (options.maxZoom < 0 || options.maxZoom > 24) throw new Error('maxZoom should be in the 0-24 range');
+    if (options.promoteId && options.generateId) throw new Error('promoteId and generateId cannot be used together.');
 
-      var features = convert(data, options);
+    var features = convert(data, options);
 
-      that.tileDb = options.tileDb; //new sqlite3.Database(':memory:');
-      // that.tileDb.run("CREATE TABLE tiles (id INT, z INT, y INT, x INT, layer_name TEXT, tile TEXT)");
-      // console.log('db');
+    this.tiles = {};
+    // this.tileCoords = []; //TODO: Do we need this?
 
-      that.tiles = {};
-      // this.tileCoords = [];
-
-      if (debug) {
+    if (debug) {
         console.timeEnd('preprocess data');
         console.log('index: maxZoom: %d, maxPoints: %d', options.indexMaxZoom, options.indexMaxPoints);
         console.time('generate tiles');
-        that.stats = {};
-        that.total = 0;
-      }
-
-      features = wrap.apply(that, [features, options]);
-
-      // start slicing from the top tile down
-      if (features.length) that.splitTile.apply(that, [features, 0, 0, 0, null, null, null, that.tileDb]);
-
-      if (debug) {
-        if (features.length) console.log('features: %d, points: %d', that.tiles[0].numFeatures, that.tiles[0].numPoints);
-        console.timeEnd('generate tiles');
-        console.log('tiles generated:', that.total, JSON.stringify(that.stats));
-      }
-      queue.promise.then(resolve).catch(reject);
-      queue.remove();
-    } catch (e) {
-      reject(e);
-      throw new Error(e);
+        this.stats = {};
+        this.total = 0;
     }
-  });
+
+    features = wrap(features, options);
+
+    // start slicing from the top tile down
+    if (features.length) this.splitTile(features, 0, 0, 0);
+
+    if (debug) {
+        if (features.length) console.log('features: %d, points: %d', this.tiles[0].numFeatures, this.tiles[0].numPoints);
+        console.timeEnd('generate tiles');
+        console.log('tiles generated:', this.total, JSON.stringify(this.stats));
+    }
 }
 
 GeoJSONVT.prototype.options = {
@@ -815,12 +803,11 @@ GeoJSONVT.prototype.options = {
     debug: 0                // logging level (0, 1 or 2)
 };
 
-GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy, tileDb) {
+GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy) {
 
     var stack = [features, z, x, y],
         options = this.options,
         debug = options.debug;
-    options.tileDb = tileDb;
 
     // avoid recursion by using a processing queue
     while (stack.length) {
@@ -832,11 +819,11 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy, tileDb)
         var z2 = 1 << z,
             id = toID(z, x, y),
             tile = this.tiles[id];
+        options.tileId = id;
 
         if (!tile) {
             if (debug > 1) console.time('creation');
 
-            options.tileId = id;
             tile = this.tiles[id] = createTile(features, z, x, y, options);
             // this.tileCoords.push({z: z, x: x, y: y});
 
@@ -853,7 +840,7 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy, tileDb)
         }
 
         // save reference to original geometry in tile so that we can drill down later if we stop now
-        tile.source = features;
+        // tile.source = features; //TODO: can we clean this up at all?
 
         // if it's the first-pass tiling
         if (!cz) {
@@ -900,6 +887,10 @@ GeoJSONVT.prototype.splitTile = function (features, z, x, y, cz, cx, cy, tileDb)
             tr = clip(right, z2, y - k1, y + k3, 1, tile.minY, tile.maxY, options);
             br = clip(right, z2, y + k2, y + k4, 1, tile.minY, tile.maxY, options);
             right = null;
+        }
+
+        if (z + 1 <= options.minZoom) {
+            delete tile.features;
         }
 
         if (debug > 1) console.timeEnd('clipping');
