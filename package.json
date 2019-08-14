@@ -1,5 +1,15 @@
 {
   "name": "vector-tile-studio",
+  "version": "0.0.1",
+  "description": "Build vector tiles using tilemill style yml files and geojson-vt",
+  "scripts": {
+    "start": "node index",
+    "serve": "node server"
+  },
+  "respository": {
+    "type": "git",
+    "url": "http://github.com/jimmyrocks/vector-tile-studio"
+  },
   "dependencies": {
     "express": "^4.17.1",
     "fandlebars": "git+https://git@github.com/jimmyrocks/fandlebars.git",
