@@ -13,23 +13,31 @@ var getZooms = require('./src/getZooms');
 var mainConfigFile = __dirname + '/configs.json';
 var write = require('./src/writeResults');
 
-var taskList = [{
-  'name': 'jsonConfigFile',
-  'description': 'Loads the JSON file that drives the changes',
-  'task': readJson,
-  'params': [mainConfigFile, 0]
-},{
-  'name': 'ymlConfigFile',
-  'description': 'Loads the mapbox studio YML file into JSON',
-  'task': readYml,
-  'params': ['{{jsonConfigFile.path}}']
-},{
-  'name': 'getZooms',
-  'description': 'Builds the tiles',
-  'task': getZooms,
-  'params': ['{{ymlConfigFile}}']
-}];
+var main = function(path) {
+  var taskList = [{
+    'name': 'jsonConfigFile',
+    'description': 'Loads the JSON file that drives the changes',
+    'task': readJson,
+    'params': [mainConfigFile, 0]
+  }, {
+    'name': 'ymlConfigFile',
+    'description': 'Loads the mapbox studio YML file into JSON',
+    'task': readYml,
+    'params': [path || '{{jsonConfigFile.path}}']
+  }, {
+    'name': 'getZooms',
+    'description': 'Builds the tiles',
+    'task': getZooms,
+    'params': ['{{ymlConfigFile}}']
+  }];
 
-iterateTasksLight(taskList, 'Run vt-config')
-  .then(write.success)
-  .catch(write.failure);
+  return iterateTasksLight(taskList, 'Run vt-config')
+    .then(write.success)
+    .catch(write.failure);
+};
+
+if (require.main === module) {
+  //called directly
+  main();
+}
+module.exports = main;
