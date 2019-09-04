@@ -223,9 +223,14 @@ var merge = function (db, outDbPath, config) {
       console.log('');
 
       var writeLine = function (line) {
-        process.stdout.clearLine();
-        process.stdout.cursorTo(0);
-        process.stdout.write(line);
+        if (process && process.stdout && process.stdout.clearLine) {
+          // This doesn't work when being piped to a file
+          process.stdout.clearLine();
+          process.stdout.cursorTo(0);
+          process.stdout.write(line);
+        } else {
+          console.log(line);
+        }
       };
 
       var writeOut = function (insertCommand, record, metadata) {
