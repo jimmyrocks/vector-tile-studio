@@ -15,10 +15,10 @@
     "fandlebars": "git+https://git@github.com/jimmyrocks/fandlebars.git",
     "geojson-vt": "^3.2.1",
     "jm-tools": "git+https://git@github.com/jimmyrocks/jm-tools.git",
-    "js-yaml": "^3.13.1",
-    "pg": "^7.12.1",
-    "sqlite3": "^4.0.9",
-    "tape": "^4.11.0",
-    "vt-pbf": "^3.1.1"
+    "js-yaml": "^4.1.0",
+    "pg": "^8.6.0",
+    "sqlite3": "^5.0.2",
+    "tape": "^5.2.2",
+    "vt-pbf": "^3.1.3"
   }
 }
