@@ -12,7 +12,7 @@ module.exports = function (path, options) {
       var doc;
       if (!error) {
         try {
-          doc = yaml.safeLoad(data);
+          doc = yaml.load(data);
           // Replace the system variables
           doc = fandlebars.obj(doc, envVariables);
           resolve(doc);
