@@ -239,7 +239,7 @@ var merge = function (db, outDbPath, config) {
         // console.log(metadata);
         // console.log(record);
         // console.log('^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^');
-        var buff = new Buffer(vtpbf.fromGeojsonVt(record));
+        var buff = new Buffer(vtpbf.fromGeojsonVt(record, {version: 2}));
         added = queue.add();
         writeLine('Added: ' + added);
         var compressed = zlib.deflateSync(buff);
